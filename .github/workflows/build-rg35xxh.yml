@@ -1,0 +1,76 @@
+name: Build GL4ES for RG35XX-H
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ARM64 libraries
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            binutils
+
+      - name: Configure GL4ES
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_C_FLAGS="-O3 -mcpu=cortex-a53 -mtune=cortex-a53 -flto -ffast-math" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-flto" \
+            -DCMAKE_EXE_LINKER_FLAGS="-flto" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DGBM=OFF \
+            -DNOX11=ON \
+            -DNOEGL=OFF \
+            -DEGL_WRAPPER=ON \
+            -DGLX_STUBS=ON \
+            -DDEFAULT_ES=2
+
+      - name: Build libraries
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Verify and package shared libraries
+        run: |
+          set -eux
+          mkdir -p package/lib
+          test -f lib/libGL.so.1
+          test -f lib/libEGL.so.1
+          cp -av lib/libGL.so.1 lib/libEGL.so.1 package/lib/
+
+          for library in package/lib/*.so.1; do
+            readelf -h "$library" | grep -q 'AArch64'
+            if readelf -d "$library" | grep -Eiq 'lib(drm|gbm)'; then
+              echo "Unexpected DRM/GBM dependency in $library"
+              exit 1
+            fi
+          done
+
+          cat > package/build-info.txt <<'EOF'
+          Target: Anbernic RG35XX-H (ARM64 / Cortex-A53)
+          Runner: Ubuntu 24.04 ARM64
+          Renderer: GL4ES with GLES2 default
+          EGL wrapper: enabled
+          X11: disabled
+          GBM/DRM/KMS: disabled
+          Optimization: -O3 -mcpu=cortex-a53 -mtune=cortex-a53 -flto -ffast-math
+          EOF
+
+      - name: Upload libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl4es-rg35xxh-ubuntu-24.04-arm64
+          path: package/
+          if-no-files-found: error
+          retention-days: 30
